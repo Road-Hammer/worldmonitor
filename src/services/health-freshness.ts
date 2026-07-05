@@ -101,6 +101,12 @@ export async function refreshDataFreshnessFromHealth(options: RefreshHealthFresh
     : (await import('@/services/runtime')).toApiUrl(endpoint);
   const resp = await fetchFn(url, {
     headers: { Accept: 'application/json' },
+    // Cloudflare's zone Browser-Cache-TTL override rewrites the origin's
+    // max-age=0 to 30min (#4910); a browser-cached body older than the 15-min
+    // FRESH_THRESHOLD would flip every synthesized-OK source to stale.
+    // no-cache = revalidate every poll; the CDN's 60s edge cache (#4907)
+    // still absorbs the origin cost.
+    cache: 'no-cache',
     signal: options.signal,
   });
 

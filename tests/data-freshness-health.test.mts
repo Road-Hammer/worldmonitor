@@ -277,6 +277,24 @@ describe('health freshness ingestion', () => {
     assert.deepEqual(seenUrls, ['/api/health?compact=1']);
   });
 
+  // Cloudflare's zone Browser-Cache-TTL override rewrites the origin's
+  // max-age=0 to 30min on this path (#4910). A browser-cached body older than
+  // the 15-min FRESH_THRESHOLD would flip every synthesized-OK source to
+  // stale in oscillating waves, so the poller must revalidate every tick —
+  // the CDN's 60s edge cache still absorbs the origin cost.
+  it('forces browser revalidation on every poll (cache: no-cache)', async () => {
+    __resetHealthFreshnessForTests();
+    let seenInit: RequestInit | undefined;
+    await refreshDataFreshnessFromHealth({
+      urlResolver: (path) => path,
+      fetchFn: async (_url, init) => {
+        seenInit = init;
+        return jsonResponse({ status: 'HEALTHY', checkedAt: new Date().toISOString() });
+      },
+    });
+    assert.equal(seenInit?.cache, 'no-cache');
+  });
+
   it('hydrates from a compact payload: problems degrade, absent mapped checks read healthy', async () => {
     __resetHealthFreshnessForTests();
     const mappedSources = new Set(Object.values(HEALTH_CHECK_SOURCE_MAP).flat());
