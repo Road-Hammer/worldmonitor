@@ -35,28 +35,41 @@ import type { McpAuthContext, McpHandlerDeps } from './types';
 // discovery surface an agent (or an agent-readiness scanner) needs to learn
 // what this server is and what it exposes BEFORE authenticating — exactly the
 // metadata already published in the static server-card.json and the public
-// docs. `tools/list`, `resources/list`, and `resources/templates/list` are all
-// catalog-enumeration methods that return only public metadata (names,
-// descriptions, URIs / URI templates — no data, no quota), so all are
+// docs. `tools/list`, `resources/list`, `resources/templates/list`,
+// `prompts/list`, and `prompts/get` are all catalog/template-enumeration
+// methods that return only public metadata (names, descriptions, URIs / URI
+// templates, static workflow-template prose — no data, no quota), so all are
 // anonymously servable: a scanner that reads the `resources` capability from
 // `initialize` MUST be able to enumerate it, or the capability reads as
-// advertised-but-empty. `resources/read` of a PUBLIC resource (a concrete,
-// metadata-only freshness/health probe — see PUBLIC_RESOURCE_REGISTRY) is
-// ALSO anonymously servable + quota-exempt; it is promoted to the public path
-// per-request via `isPublicResourceUri` below because it carries no billable
-// data. Everything that returns DATA or spends quota (`tools/call`, and
-// `resources/read` of a data-bearing TEMPLATE instantiation) — plus the
-// metadata methods the product keeps gated (`prompts/list`,
-// `logging/setLevel`) — still requires credentials. `notifications/initialized`
+// advertised-but-empty. The gating invariant (#4937): every capability the
+// ANONYMOUS `initialize` advertises must be anonymously exercisable. A gated
+// method answers HTTP 401 with JSON-RPC id:null, which an MCP SDK transport
+// cannot correlate to the pending request — the client hangs to its 30s
+// timeout and marks the server unstable (customer-hit via Claude Desktop +
+// mcp-remote, which never OAuths because the public `initialize` never
+// challenges it). That is why `prompts/*` (static templates), `ping` (spec
+// liveness check — SDK keepalives hang identically), and `logging/setLevel`
+// (no-op ack for the advertised `logging` capability) are public. All
+// anonymous traffic stays behind applyAnonDiscoveryLimit. `resources/read` of
+// a PUBLIC resource (a concrete, metadata-only freshness/health probe — see
+// PUBLIC_RESOURCE_REGISTRY) is ALSO anonymously servable + quota-exempt; it
+// is promoted to the public path per-request via `isPublicResourceUri` below
+// because it carries no billable data. Everything that returns DATA or spends
+// quota (`tools/call`, and `resources/read` of a data-bearing TEMPLATE
+// instantiation) still requires credentials. `notifications/initialized`
 // is the client's post-`initialize` handshake notification (carries no data);
 // leaving it public lets a strict MCP client complete the handshake before
 // calling `tools/list`.
 const PUBLIC_MCP_METHODS: ReadonlySet<string> = new Set([
   'initialize',
   'notifications/initialized',
+  'ping',
   'tools/list',
+  'prompts/list',
+  'prompts/get',
   'resources/list',
   'resources/templates/list',
+  'logging/setLevel',
 ]);
 
 // Mirror of resolveAuthContext's credential-header contract: does the request
