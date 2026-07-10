@@ -6,6 +6,8 @@
  * entry chunk. Keep pre-init queuing in `sentry-defer.ts`; keep SDK setup here.
  */
 
+import { isDebugBearRumScriptFrame } from './debugbear-rum';
+
 type SentryNs = typeof import('@sentry/browser');
 
 // Known third-party hosts fetched by MapLibre (tiles, styles, glyphs, sprites).
@@ -442,6 +444,29 @@ function buildSentryInitOptions(): Parameters<SentryNs['init']>[0] {
       if (excType === 'TypeError' && frames.some(f => /sortedTrackListForMenu/.test(f.function ?? ''))) return null;
       // Suppress TypeErrors from anonymous/injected scripts (no real source files or only inline page URL)
       if ((excType === 'TypeError' || /^TypeError:/.test(msg)) && frames.length > 0 && frames.every(f => !f.filename || f.filename === '<anonymous>' || /^blob:/.test(f.filename) || /^https?:\/\/[^/]+\/?$/.test(f.filename))) return null;
+      // Suppress errors thrown by an injected browser-automation harness driving
+      // the page (e.g. Floot's agent). Its selector-resolution helpers throw
+      // `Element not found: <sel>`, `No element found: <sel>`, and
+      // `$pressKey(...) was called with no selector` from an injected
+      // `<anonymous>` script (helperGetStyle et al.), and reference Floot's own
+      // `data-floot-id` attribute. These are generic `Error` (not TypeError, so
+      // the anonymous-script gate above misses them) whose only frames are
+      // `<anonymous>` → hasFirstParty=false. Our bundle never emits these
+      // phrasings (grep-verified across src/ + api/). Gated on !hasFirstParty so
+      // a same-worded first-party error would still surface. The `... found:`
+      // matches REQUIRE the trailing colon+selector, leaving the colon-less
+      // ambiguous `Element not found` (handled by the !hasFirstParty ambiguous
+      // gate below, which additionally demands a confirmed third-party stack)
+      // untouched. WORLDMONITOR-VR/VV/VW/VX/VY/VS/VT/VZ (2026-07-09 Floot agent).
+      // NB: the `called with no selector` regex deliberately omits the leading
+      // "was " — the beforeSend unit-test harness strips TypeScript `as <T>`
+      // assertions with a crude `/as\s+\w+/` that also mangles the English
+      // "was called". Matching from "called" keeps the test's eval'd copy intact.
+      if (!hasFirstParty && (
+        /^(?:Element not found|No element found):/.test(msg)
+        || /\bcalled with no selector\b/.test(msg)
+        || /data-floot-id/.test(msg)
+      )) return null;
       // Suppress parentNode.insertBefore from injected/inline scripts (iOS WKWebView, Apple Mail)
       // Also covers [native code] frames (no filename) produced by WKWebView's forEach wrapper
       if (/parentNode\.insertBefore/.test(msg) && frames.every(f => !f.filename || f.filename === '<anonymous>' || f.filename === '[native code]' || /^blob:/.test(f.filename) || /^https?:\/\/[^/]+\/?$/.test(f.filename))) return null;
@@ -509,6 +534,32 @@ function buildSentryInitOptions(): Parameters<SentryNs['init']>[0] {
       // surfaces as `Object.apply`, not `window.fetch`.
       if (/^(?:TypeError: )?Failed to fetch$/.test(msg)
           && frames.some(f => /^(?:chrome|moz|safari(?:-web)?)-extension:\/\//.test(f.filename ?? '') && /^(?:(?:window|Object)\.)?(?:fetch|apply)$/i.test(f.function ?? ''))) {
+        return null;
+      }
+      // Bare `Failed to fetch` surfacing through the DebugBear RUM collector's
+      // window.fetch monkeypatch. DebugBear (src/bootstrap/debugbear-rum.ts →
+      // cdn.debugbear.com/<id>.js; Sentry attributes its frames to the script
+      // configured script path) wraps window.fetch to time it, so a
+      // transient network blip on ANY app fetch rejects and its wrapper
+      // re-surfaces the rejection as an unhandled rejection, injecting its own
+      // frames. Without DebugBear the identical failure is zero-frame and already
+      // suppressed above — the collector's frames are the ONLY reason it reaches
+      // here. The `/assets/*.js` frames it carries are `window.fetch` TRAMPOLINES
+      // (Vite code-split chunk names, e.g. panel-storage/widget-store, which do
+      // not themselves fetch — grep-verified), NOT real callers. Suppress only
+      // when a DebugBear collector frame is present AND every non-infra frame is
+      // either that collector or the observed caller-free `window.fetch`/`fetch`
+      // trampolines from panel-storage/widget-store. Other first-party fetch
+      // wrappers (notably runtime.ts) must surface. Mirrors the SG
+      // extension-wrapper gate above; collector identity comes from
+      // DEBUGBEAR_RUM_SCRIPT_SRC via the shared predicate.
+      // WORLDMONITOR-VC (93ev/69u, 2026-07-04+).
+      if (/^(?:TypeError: )?Failed to fetch$/.test(msg)
+          && frames.some(f => isDebugBearRumScriptFrame(f.filename ?? ''))
+          && nonInfraFrames.every(f =>
+            isDebugBearRumScriptFrame(f.filename ?? '')
+            || (/\/assets\/(?:panel-storage|widget-store)-[A-Za-z0-9_-]+\.js/.test(f.filename ?? '')
+              && /^(?:window\.)?fetch$/.test(f.function ?? '')))) {
         return null;
       }
       // Suppress Sentry SDK DOM breadcrumb null-access on document.activeElement/contains.
