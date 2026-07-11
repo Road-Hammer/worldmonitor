@@ -64,6 +64,7 @@
   "overrides": {
     "onnxruntime-web": {
       "protobufjs": "https://npm.aikido.io/1d49b833bf910aedc1911/protobufjs@7.5.4-aikido.6"
-    }
+    },
+    "onnxruntime-node@<1.24.2": "1.24.2"
   }
 }
