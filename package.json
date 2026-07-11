@@ -60,5 +60,10 @@
     "onnxruntime-web": "^1.23.2",
     "topojson-client": "^3.1.0",
     "youtubei.js": "^16.0.1"
+  },
+  "overrides": {
+    "onnxruntime-web": {
+      "protobufjs": "https://npm.aikido.io/1d49b833bf910aedc1911/protobufjs@7.5.4-aikido.6"
+    }
   }
 }
